@@ -8,12 +8,13 @@ from spherov2.toy.bb8 import BB8
 from spherov2.sphero_edu import EventType, SpheroEduAPI
 from spherov2.types import Color
 from typing import Dict
+from spherov2.commands.power import Power
 
-print("finding droid")
+print("finding BB8")
 toy = scanner.find_BB8(toy_name="BB-9684")
 if toy is None:
-    raise "could not find droid"
-print("found droid")
+    raise "could not find BB8"
+print("found BB8")
 
 # toy.sensor_control.set_interval(150)
 
@@ -48,19 +49,16 @@ def stop(droid: SpheroEduAPI):
     print("stopping")
     droid.set_speed(0)
     while True:
-        loc = droid.get_location()
         v = droid.get_velocity()
-        a = droid.get_acceleration()
-        gyro = droid.get_gyroscope()
 
         # logger.log(droid)
-        print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
+        # print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
         vx = v['x']
         vy = v['y']
-        if math.sqrt(vx*vx+vy*vy) < 10:
+        if math.hypot(vx,vy) < 10:
             print("stopped")
             break
-        time.sleep(0.1)
+        time.sleep(0.05)
 
 def go_straight(droid: SpheroEduAPI, goal_cm: float):
     goal_tolerance = 5
@@ -76,6 +74,26 @@ def go_straight(droid: SpheroEduAPI, goal_cm: float):
         time.sleep(0.1)
         d = distance(droid.get_location(), start_loc)
     stop(droid)
+
+# returns the signed difference between two angle in degrees
+def angle_delta(target, source):
+    a = target - source
+    delta = (a + 180) % 360 - 180
+    return delta
+
+def turn_to_yaw(droid: SpheroEduAPI, goal_yaw: float):
+    heading_tolerance = 3
+    droid.set_heading(-int(goal_yaw)) # using negative because set_heading uses cw, and yaw is ccw
+
+    while True:
+        yaw = droid.get_orientation()["yaw"]
+        heading_error = abs(angle_delta(yaw, goal_yaw))
+        print(f"turning to goal yaw: {goal_yaw} yaw: {yaw} heading_error: {heading_error}")
+        if heading_error < heading_tolerance:
+            print("turn complete")
+            break
+        time.sleep(0.05)
+
 
 class DataLogger:
 
@@ -124,106 +142,115 @@ logger = DataLogger()
 
 def on_sensor_msg(*argv):
     droid = argv[0]
-    loc = droid.get_location()
-    v = droid.get_velocity()
-    a = droid.get_acceleration()
-    gyro = droid.get_gyroscope()
+    # loc = droid.get_location()
+    # v = droid.get_velocity()
+    # a = droid.get_acceleration()
+    # gyro = droid.get_gyroscope()
 
     logger.log(droid)
-    print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
+    # print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
 
 
 while True: # make with breakable
     with  SpheroEduAPI(toy) as droid:
+        battery_voltage  = Power.get_battery_voltage(toy)
+        print(f"battery_voltage: {battery_voltage}")
+        toy.sensor_control.set_interval(50) # set up faster sensor polling
         time.sleep(1.0) # give robot time to get some messages
         droid.register_event(EventType.on_sensor_streaming_data, on_sensor_msg)
-        go_straight(droid, 10.0)
-        logger.save_csv()
-        break
-        #t.sensor_control.enable('accelerometer')
-        #t.sensor_control.set_count(1)
-        #t.sensor_control.set_interval(20)
-        # t.add_sensor_streaming_data_notify_listener() throws exceptoin
-
-        droid.set_speed(0)
-        time.sleep(0.1)
-        # print(droid.get_location()['x'])
-        droid.set_main_led(Color(r=0, g=0, b=0))
-        droid.set_back_led(255)
-
-        logger = DataLogger()
-        droid.set_main_led(Color(r=0, g=255, b=0))
-    
-
-        droid.set_speed(200)
-        print("should be moving now")
-
-        
-        for _ in range(50):
-            loc = droid.get_location()
-            v = droid.get_velocity()
-            a = droid.get_acceleration()
-            gyro = droid.get_gyroscope()
-
-            logger.log(droid)
-            print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
-            time.sleep(0.1)
-
-        print("stopping")
-        droid.set_speed(0)
-        while True:
-            loc = droid.get_location()
-            v = droid.get_velocity()
-            a = droid.get_acceleration()
-            gyro = droid.get_gyroscope()
-
-            logger.log(droid)
-            print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
-            vx = v['x']
-            vy = v['y']
-            if math.sqrt(vx*vx+vy*vy) < 10:
-                print("stopped")
-                break
-            time.sleep(0.1)
+        for _ in range(10):
+            go_straight(droid, 30.0)
+            turn_to_yaw(droid, -droid.get_heading()+90)
 
         logger.save_csv()
-
-        df = logger.get_dataframe()
-        
-        plt.subplot(2,2,1)
-        plt.gca().set_aspect('equal')
-        plt.title("location")
-        plt.plot(df.loc_x.to_numpy() ,df.loc_y.to_numpy(),"o",label="y")
-        plt.xlabel("x")
-        plt.ylabel("y")
-
-        plt.subplot(2,2,2)
-        plt.title("location vs. time")
-        plt.plot(df.t.to_numpy(), df.loc_x.to_numpy(), "o", label="x")
-        plt.plot(df.t, df.loc_y.to_numpy(), "o", label="y")
-        plt.xlabel("t")
-        plt.ylabel("distance")
-        plt.legend()
-
-        plt.subplot(2,2,3)
-        plt.title("velocity")
-        plt.plot(df.t, df.v_x, "o", label="x")
-        plt.plot(df.t, df.v_y, "o", label="y")
-        plt.xlabel("t")
-        plt.legend()
-
-        plt.subplot(2,2,4)
-        plt.title("gyro")
-        plt.plot(df.t, df.gyro_x, label="x")
-        plt.plot(df.t, df.gyro_y, label="y")
-        plt.plot(df.t, df.gyro_z, label="z")
-        plt.xlabel("t")
-        plt.show()
-
-
-        droid.set_main_led(Color(r=0, g=255, b=255))
         break
-
-        
 
 print("done")
+
+
+def ignore():
+    #t.sensor_control.enable('accelerometer')
+    #t.sensor_control.set_count(1)
+    #t.sensor_control.set_interval(20)
+    # t.add_sensor_streaming_data_notify_listener() throws exceptoin
+
+    droid.set_speed(0)
+    time.sleep(0.1)
+    # print(droid.get_location()['x'])
+    droid.set_main_led(Color(r=0, g=0, b=0))
+    droid.set_back_led(255)
+
+    logger = DataLogger()
+    droid.set_main_led(Color(r=0, g=255, b=0))
+
+
+    droid.set_speed(200)
+    print("should be moving now")
+
+    
+    for _ in range(50):
+        loc = droid.get_location()
+        v = droid.get_velocity()
+        a = droid.get_acceleration()
+        gyro = droid.get_gyroscope()
+
+        logger.log(droid)
+        print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
+        time.sleep(0.1)
+
+    print("stopping")
+    droid.set_speed(0)
+    while True:
+        loc = droid.get_location()
+        v = droid.get_velocity()
+        a = droid.get_acceleration()
+        gyro = droid.get_gyroscope()
+
+        logger.log(droid)
+        print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
+        vx = v['x']
+        vy = v['y']
+        if math.sqrt(vx*vx+vy*vy) < 10:
+            print("stopped")
+            break
+        time.sleep(0.1)
+
+    logger.save_csv()
+
+    df = logger.get_dataframe()
+    
+    plt.subplot(2,2,1)
+    plt.gca().set_aspect('equal')
+    plt.title("location")
+    plt.plot(df.loc_x.to_numpy() ,df.loc_y.to_numpy(),"o",label="y")
+    plt.xlabel("x")
+    plt.ylabel("y")
+
+    plt.subplot(2,2,2)
+    plt.title("location vs. time")
+    plt.plot(df.t.to_numpy(), df.loc_x.to_numpy(), "o", label="x")
+    plt.plot(df.t, df.loc_y.to_numpy(), "o", label="y")
+    plt.xlabel("t")
+    plt.ylabel("distance")
+    plt.legend()
+
+    plt.subplot(2,2,3)
+    plt.title("velocity")
+    plt.plot(df.t, df.v_x, "o", label="x")
+    plt.plot(df.t, df.v_y, "o", label="y")
+    plt.xlabel("t")
+    plt.legend()
+
+    plt.subplot(2,2,4)
+    plt.title("gyro")
+    plt.plot(df.t, df.gyro_x, label="x")
+    plt.plot(df.t, df.gyro_y, label="y")
+    plt.plot(df.t, df.gyro_z, label="z")
+    plt.xlabel("t")
+    plt.show()
+
+
+    droid.set_main_led(Color(r=0, g=255, b=255))
+
+        
+
