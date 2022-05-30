@@ -61,23 +61,39 @@ def stop(droid: SpheroEduAPI):
         time.sleep(0.05)
 
 def go_straight(droid: SpheroEduAPI, goal_cm: float):
+    """ travel a straight line until goal_cm is reached, an obstacle is hit, or travel times out
+
+    returns a tuple (result, result_location): 
+
+    result:
+       "ok"        - goal reached
+       "crashed"   - stopped by a detectable crash, location will be set to crash location
+       "stalled"   - stopped by lack of forward progress, location will be set to location where progess halted
+       "timed out" - timed out trying for goal while still making progress
+    
+    result_location - dict of robot "x" and "y" location where result occured
+
+    """
     goal_tolerance = 5
-    k_p = 3
+    k_p = 6
     k_d = 3
     d = 0
     timeout_seconds = goal_cm / 20.0 + 2;
     start_loc = droid.get_location()
+
+    result = "ok"
+
     start_time = time.time()
-    results = {}
-    results["crashed"] = False
     logger.reset_crash_detector()
     while d + goal_tolerance < goal_cm:
         if time.time()-start_time > timeout_seconds:
+            result = "timed out"
+            result_location = droid.get_location()
             print("go_straight timed out")
             break
         if logger.crash_detected:
-            results["crashed"] = True
-            results["crash_location"] = logger.crash_location
+            result = "crashed"
+            result_location = logger.crash_location
             print("crashed, aborting go straight");
             break
         error_p = goal_cm - d
@@ -87,6 +103,10 @@ def go_straight(droid: SpheroEduAPI, goal_cm: float):
         time.sleep(0.01)
         d = distance(droid.get_location(), start_loc)
     stop(droid)
+    if result == "ok":
+        result_location = droid.get_location()
+    
+    return (result, result_location)
 
 # returns the signed difference between two angle in degrees
 def angle_delta(target, source):
@@ -237,51 +257,130 @@ def show_charts():
     plt.xlabel("t")
     plt.show()    
 
+def get_yaw(droid: SpheroEduAPI):
+    return -droid.get_heading()
+
+def follow_walls_strategy_3(droid: SpheroEduAPI, gap_cm: int, step_cm: int, max_total_cm: int = 1000, max_total_seconds: float = 3*60):
+    """ follow walls counterclockwise travelling along rectangular paths that bump into the wall  
+    
+    assumes that robot starts with blue light pointing at wall
+    """
+
+    start_distance = droid.get_distance()
+    start_time = time.time()
+
+    wall_normal = get_yaw(droid) # normal is a yaw value pointing away from the wall
+
+    # turn toward wall
+    turn_to_yaw(droid, wall_normal+180)
+
+    # ram into wall
+    (result, location) = go_straight(droid, gap_cm+step_cm)
+    if result == "ok":
+        print("PROBLEM - did not reach initial wall")
+        stop(droid)
+        return
+
+    # perform a step - starts will sitting right next to wall
+    while True:
+
+        # check for "done" conditions
+
+        if droid.get_distance() - start_distance >= max_total_cm:
+            print("done following walls - max distance reached")
+            break;
+
+        if time.time() - start_time >= max_total_seconds:
+            print("done following walls - time limit reached")
+            break;
+
+
+        # move away from wall
+        print("moving away from wall")
+        turn_to_yaw(droid, wall_normal)
+        (result, location) = go_straight(droid, gap_cm)
+        if result != "ok":
+            print(f"PROBLEM - could not move away from wall, result was {result}")
+            stop(droid)
+            return
+
+        # move foward along wall
+        turn_to_yaw(droid, wall_normal - 90)
+        (result, location) = go_straight(droid, step_cm)
+        if result != "ok":
+            print("looks to be a left turning corner, continue stepping along this newly discovered wall")
+            wall_normal += 90
+            continue
+
+        # try ramming into wall
+        turn_to_yaw(droid, wall_normal+180)
+        (result, location) = go_straight(droid, gap_cm + step_cm)
+        if result != "ok":
+            print("found same wall, continuing along this wall")
+            continue
+
+        print("seems we have a right turning corner, trying to slam into new all")
+        wall_normal -= 90
+        turn_to_yaw(droid, wall_normal+180)
+        (result, location) = go_straight(droid, gap_cm + step_cm)
+        if result == "ok":
+            print("PROBLEM, could not find wall after turning right")
+            stop(droid)
+            return
+        continue
 
 while True: # make with breakable
     with  SpheroEduAPI(toy) as droid:
 
-        # calibrate
-        droid.set_back_led(255)
-        droid.set_main_led(Color(r=0, g=0, b=0))
-        while True:
-            try:
-                x = int(input("Heading adjust, or Press Enter to continue..."))
-            except:
-                break
-            droid.set_heading(droid.get_heading()+x)
-
-        original_yaw = -droid.get_heading()
-            
-            
-
-
+        # initialize
         droid.set_main_led(Color(r=0, g=0, b=0))
         droid.set_back_led(255)
         toy.sensor_control.set_interval(50) # set up faster sensor polling
         droid.register_event(EventType.on_sensor_streaming_data, on_sensor_msg)
         droid.register_event(EventType.on_collision, on_collision)
 
-        # make two small squares
-        for _ in range(2):
-            turn_to_yaw(droid, original_yaw+0);
-            go_straight(droid, 30);
-            turn_to_yaw(droid, original_yaw+90);
-            go_straight(droid, 30);
-            turn_to_yaw(droid, original_yaw+180);
-            go_straight(droid, 30);
-            turn_to_yaw(droid, original_yaw+270);
-            go_straight(droid, 30);
+        # calibrate
+        droid.set_back_led(255)
+        droid.set_main_led(Color(r=0, g=0, b=0))
+        while True:
+            try:
+                x = int(input("Angle to move light toward wall, or Enter to continue:"))
+            except:
+                break
+            droid.set_heading(droid.get_heading()+x)
+
+        original_yaw = -droid.get_heading()
+
+
+        follow_walls_strategy_3(droid, gap_cm=20, step_cm = 50, max_total_cm=3000)
+
+
+        # # make two small squares
+        # for _ in range(2):
+        #     print("tracing a square")
+        #     turn_to_yaw(droid, original_yaw+0);
+        #     go_straight(droid, 60);
+        #     turn_to_yaw(droid, original_yaw+90);
+        #     go_straight(droid, 60);
+        #     turn_to_yaw(droid, original_yaw+180);
+        #     go_straight(droid, 60);
+        #     turn_to_yaw(droid, original_yaw+270);
+        #     go_straight(droid, 60);
         
-        # ram into the wall
-        turn_to_yaw(droid, original_yaw+180);
-        go_straight(droid, 100);
+        # # ram into the wall
+        # print("ramming into wall")
+        # turn_to_yaw(droid, original_yaw+180);
+        # (result, result_location) = go_straight(droid, 100);
+        # print(f"result: {result} result_location: ({result_location['x']}, {result_location['y']})")
 
-        # run away from
-        turn_to_yaw(droid, 0);
-        go_straight(droid, 30);
+        # # run away from
+        # print("leaving wall")
+        # turn_to_yaw(droid, 0);
+        # go_straight(droid, 60);
 
+        print("saving results")
         logger.save_csv()
+        print("done")
         break
 
 print("done")
