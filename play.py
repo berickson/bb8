@@ -46,7 +46,7 @@ def clamp(x, min_x, max_x):
 
 
 def stop(droid: SpheroEduAPI):
-    print("stopping")
+    # print("stopping")
     droid.set_speed(0)
     while True:
         v = droid.get_velocity()
@@ -56,7 +56,7 @@ def stop(droid: SpheroEduAPI):
         vx = v['x']
         vy = v['y']
         if math.hypot(vx,vy) < 10:
-            print("stopped")
+            # print("stopped")
             break
         time.sleep(0.05)
 
@@ -68,15 +68,23 @@ def go_straight(droid: SpheroEduAPI, goal_cm: float):
     timeout_seconds = goal_cm / 20.0 + 2;
     start_loc = droid.get_location()
     start_time = time.time()
+    results = {}
+    results["crashed"] = False
+    logger.reset_crash_detector()
     while d + goal_tolerance < goal_cm:
         if time.time()-start_time > timeout_seconds:
             print("go_straight timed out")
+            break
+        if logger.crash_detected:
+            results["crashed"] = True
+            results["crash_location"] = logger.crash_location
+            print("crashed, aborting go straight");
             break
         error_p = goal_cm - d
         error_d = - get_current_speed(droid)
         sp = k_p * error_p + k_d * error_d
         droid.set_speed(int(clamp(sp, 0, 255)))
-        time.sleep(0.1)
+        time.sleep(0.01)
         d = distance(droid.get_location(), start_loc)
     stop(droid)
 
@@ -93,9 +101,7 @@ def turn_to_yaw(droid: SpheroEduAPI, goal_yaw: float):
     while True:
         yaw = droid.get_orientation()["yaw"]
         heading_error = abs(angle_delta(yaw, goal_yaw))
-        print(f"turning to goal yaw: {goal_yaw} yaw: {yaw} heading_error: {heading_error}")
         if heading_error < heading_tolerance:
-            print("turn complete")
             break
         time.sleep(0.05)
 
@@ -127,7 +133,13 @@ class DataLogger:
         self.pause = False
         self.world_frame_accelerations = []
         self.world_frame_acceleration = np.array([0, 0, 0])
+        self.reset_crash_detector()
     
+
+    def reset_crash_detector(self):
+        self.crash_detected = False
+        self.crash_location = None
+
     def log(self, droid: SpheroEduAPI):
         if self.pause: return
         loc = droid.get_location()
@@ -145,6 +157,9 @@ class DataLogger:
         world_a = y_rotation(x_rotation(np.array([a["x"], a["y"], a["z"]]), -orientation["pitch"]*math.pi/180),-orientation["roll"]*math.pi/180)
         self.world_frame_acceleration={"x":world_a[0],"y":world_a[1], "z":world_a[2]}
         self.world_frame_accelerations.append( self.world_frame_acceleration)
+        if self.crash_detected == False and self.world_frame_acceleration["y"] < -1.0:
+            self.crash_detected = True
+            self.crash_location = loc
     
     def get_dataframe(self):
         self.pause = True
@@ -184,24 +199,9 @@ def on_collision(droid: SpheroEduAPI):
     print('on_collision')
 
 def on_sensor_msg(droid: SpheroEduAPI):
-    acceleration_crash_threshold = 1
-    
-    a = droid.get_acceleration()
-    total_a = math.hypot(a["x"],a["y"])
-    if total_a > acceleration_crash_threshold:
-        location = droid.get_location()
-        x = location["x"]
-        y = location["y"]
-        print(f"crashed, total_a: {total_a} location: {x},{y}")
-
-    # loc = droid.get_location()
-    # v = droid.get_velocity()
-    # a = droid.get_acceleration()
-    # gyro = droid.get_gyroscope()
-
     logger.log(droid)
-    # print(f"x:{loc['x']:4} y:{loc['y']:4} vx:{v['x']:6.2f} vy:{v['y']:<6.2f} ax:{a['x']:6.2f} ay:{a['y']:6.2f} az:{a['z']:6.2f} gyro_x:{gyro['x']:6.1f} gyro_y:{gyro['y']:6.1f} gyro_z:{gyro['z']:6.1f}")
-
+    
+ 
 
 def show_charts():
     global logger
