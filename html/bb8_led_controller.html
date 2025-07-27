@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BB-8 Sphero LED Controller</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        h1 {
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        button {
+            background: linear-gradient(45deg, #ff6b6b, #ffa500);
+            border: none;
+            color: white;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 25px;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.2);
+            min-height: 20px;
+        }
+        
+        .color-display {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            margin: 20px auto;
+            border: 4px solid white;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .controls {
+            margin-top: 20px;
+        }
+        
+        .speed-control {
+            margin: 20px 0;
+        }
+        
+        input[type="range"] {
+            width: 200px;
+            margin: 0 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 BB-8 LED Controller</h1>
+        
+        <div class="status" id="status">Ready to connect to BB-8</div>
+        
+        <div class="color-display" id="colorDisplay"></div>
+        
+        <div class="controls">
+            <button id="connectBtn">Connect to BB-8</button>
+            <button id="cycleBtn" disabled>Start LED Cycle</button>
+            <button id="stopBtn" disabled>Stop Cycle</button>
+        </div>
+        
+        <div class="speed-control">
+            <label>Cycle Speed: </label>
+            <input type="range" id="speedSlider" min="100" max="2000" value="500" step="100">
+            <span id="speedValue">500ms</span>
+        </div>
+    </div>
+
+    <script>
+        class BB8Controller {
+            constructor() {
+                this.device = null;
+                this.server = null;
+                this.commandService = null;
+                this.commandCharacteristic = null;
+                this.isConnected = false;
+                this.isCycling = false;
+                this.cycleInterval = null;
+                this.currentColorIndex = 0;
+                this.cycleSpeed = 500;
+                
+                // RGB color sequence for smooth transitions
+                this.colors = [
+                    [255, 0, 0],     // Red
+                    [255, 127, 0],   // Orange
+                    [255, 255, 0],   // Yellow
+                    [127, 255, 0],   // Yellow-Green
+                    [0, 255, 0],     // Green
+                    [0, 255, 127],   // Green-Cyan
+                    [0, 255, 255],   // Cyan
+                    [0, 127, 255],   // Cyan-Blue
+                    [0, 0, 255],     // Blue
+                    [127, 0, 255],   // Blue-Purple
+                    [255, 0, 255],   // Purple
+                    [255, 0, 127]    // Purple-Red
+                ];
+                
+                this.initEventListeners();
+            }
+            
+            initEventListeners() {
+                document.getElementById('connectBtn').addEventListener('click', () => this.connect());
+                document.getElementById('cycleBtn').addEventListener('click', () => this.startCycle());
+                document.getElementById('stopBtn').addEventListener('click', () => this.stopCycle());
+                
+                const speedSlider = document.getElementById('speedSlider');
+                speedSlider.addEventListener('input', (e) => {
+                    this.cycleSpeed = parseInt(e.target.value);
+                    document.getElementById('speedValue').textContent = `${this.cycleSpeed}ms`;
+                    
+                    if (this.isCycling) {
+                        this.stopCycle();
+                        this.startCycle();
+                    }
+                });
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+            
+            updateColorDisplay(r, g, b) {
+                const colorDisplay = document.getElementById('colorDisplay');
+                colorDisplay.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+            }
+            
+            async connect() {
+                try {
+                    this.updateStatus('Requesting BB-8 device...');
+                    
+                    this.device = await navigator.bluetooth.requestDevice({
+                        filters: [
+                            { services: ['22bb746f-2bb0-7554-2d6f-726568705327'] },
+                            { services: ['22bb746f-2ba0-7554-2d6f-726568705327'] }
+                        ]
+                    });
+                    
+                    this.updateStatus('Connecting to BB-8...');
+                    this.server = await this.device.gatt.connect();
+                    
+                    // Get radio service (try both possible services)
+                    this.updateStatus('Getting service...');
+                    let radioService;
+                    try {
+                        radioService = await this.server.getPrimaryService('22bb746f-2bb0-7554-2d6f-726568705327');
+                    } catch (e) {
+                        radioService = await this.server.getPrimaryService('22bb746f-2ba0-7554-2d6f-726568705327');
+                    }
+                    
+                    // Try the wake-up sequence mentioned in sphero-notes
+                    this.updateStatus('Waking up BB-8...');
+                    try {
+                        // Try anti-DOS characteristic first
+                        const antiDosCharacteristic = await radioService.getCharacteristic('22bb746f-2bbd-7554-2d6f-726568705327');
+                        // Write "011i3" as string to wake up (as mentioned in sphero-notes)
+                        const wakeUpString = new TextEncoder().encode("011i3");
+                        await antiDosCharacteristic.writeValue(wakeUpString);
+                        this.updateStatus('Wake-up command sent...');
+                        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+                    } catch (e) {
+                        console.log('Wake-up failed, trying alternative:', e.message);
+                        // Fallback: try with timeout disable
+                        try {
+                            const antiDosCharacteristic = await radioService.getCharacteristic('22bb746f-2bbd-7554-2d6f-726568705327');
+                            await antiDosCharacteristic.writeValue(new Uint8Array([0x0A])); // 10 seconds timeout
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                        } catch (e2) {
+                            console.log('All wake-up methods failed');
+                        }
+                    }
+                    
+                    // Get command characteristic - try the write characteristic that actually supports writes
+                    this.updateStatus('Getting LED control characteristic...');
+                    this.commandService = radioService;
+                    
+                    // Try the characteristic that supports write operations
+                    this.commandCharacteristic = await this.commandService.getCharacteristic('22bb746f-2bb2-7554-2d6f-726568705327');
+                    
+                    this.isConnected = true;
+                    this.updateStatus('Connected to BB-8! Testing LED...');
+                    
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('cycleBtn').disabled = false;
+                    
+                    // Try to set initial color - this will tell us if commands work
+                    await this.setLEDColor(255, 0, 0); // Red
+                    this.updateStatus('Connected to BB-8! Ready to control LEDs.');
+                    
+                } catch (error) {
+                    console.error('Connection failed:', error);
+                    this.updateStatus(`Connection failed: ${error.message}`);
+                }
+            }
+            
+            async setLEDColor(r, g, b) {
+                if (!this.isConnected || !this.commandCharacteristic) {
+                    return;
+                }
+                
+                try {
+                    // Simple command format that should work with BB-8
+                    const command = new Uint8Array([r, g, b]);
+                    
+                    console.log('Sending simple RGB command:', Array.from(command).map(x => '0x' + x.toString(16).padStart(2, '0')).join(' '));
+                    
+                    await this.commandCharacteristic.writeValue(command);
+                    this.updateColorDisplay(r, g, b);
+                    
+                } catch (error) {
+                    console.error('Failed to set LED color:', error);
+                    this.updateStatus(`LED command failed: ${error.message}`);
+                }
+            }
+            
+            startCycle() {
+                if (!this.isConnected) return;
+                
+                this.isCycling = true;
+                document.getElementById('cycleBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                this.updateStatus('Cycling through RGB colors...');
+                
+                this.cycleInterval = setInterval(() => {
+                    const [r, g, b] = this.colors[this.currentColorIndex];
+                    this.setLEDColor(r, g, b);
+                    
+                    this.currentColorIndex = (this.currentColorIndex + 1) % this.colors.length;
+                }, this.cycleSpeed);
+            }
+            
+            stopCycle() {
+                if (this.cycleInterval) {
+                    clearInterval(this.cycleInterval);
+                    this.cycleInterval = null;
+                }
+                
+                this.isCycling = false;
+                document.getElementById('cycleBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                this.updateStatus('LED cycling stopped.');
+            }
+        }
+        
+        // Check for Web Bluetooth support with detailed info
+        if (!navigator.bluetooth) {
+            const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+            const userAgent = navigator.userAgent;
+            const isChrome = userAgent.includes('Chrome') && !userAgent.includes('Edg');
+            
+            let errorMsg = 'Web Bluetooth is not available. ';
+            if (!isSecure) {
+                errorMsg += 'Must use HTTPS or localhost. ';
+            }
+            if (!isChrome) {
+                errorMsg += 'Try Chrome or Edge. ';
+            }
+            errorMsg += `Current: ${location.protocol}//${location.hostname}`;
+            
+            document.getElementById('status').textContent = errorMsg;
+            document.getElementById('connectBtn').disabled = true;
+        } else {
+            // Initialize the BB-8 controller
+            const bb8 = new BB8Controller();
+        }
+    </script>
+</body>
+</html>
